@@ -65,9 +65,9 @@ pub struct ColumnarMenu {
     col_pos: u16,
     /// row position in the menu. Starts from 0
     row_pos: u16,
-    /// Number of values that are skipped when printing,
+    /// Number of rows that are skipped when printing,
     /// depending on selected value and terminal height
-    skip_values: u16,
+    skip_rows: u16,
     /// Event sent to the menu
     event: Option<MenuEvent>,
     /// Longest suggestion found in the values
@@ -87,7 +87,7 @@ impl Default for ColumnarMenu {
             values: Vec::new(),
             col_pos: 0,
             row_pos: 0,
-            skip_values: 0,
+            skip_rows: 0,
             event: None,
             longest_suggestion: 0,
             input: None,
@@ -130,50 +130,48 @@ impl ColumnarMenu {
 impl ColumnarMenu {
     /// Move menu cursor to the next element
     fn move_next(&mut self) {
-        let mut new_col = self.col_pos + 1;
-        let mut new_row = self.row_pos;
-
-        if new_col >= self.get_cols() {
-            new_row += 1;
-            new_col = 0;
-        }
+        let mut new_col = self.col_pos;
+        let mut new_row = self.row_pos + 1;
 
         if new_row >= self.get_rows() {
+            new_col += 1;
+            new_row = 0;
+        }
+
+        if new_col >= self.get_cols() {
             new_row = 0;
             new_col = 0;
         }
 
-        let position = new_row * self.get_cols() + new_col;
-        if position >= self.get_values().len() as u16 {
-            self.reset_position();
-        } else {
+        if self.valid_position(new_row, new_col) {
             self.col_pos = new_col;
             self.row_pos = new_row;
+        } else {
+            self.reset_position();
         }
     }
 
     /// Move menu cursor to the previous element
     fn move_previous(&mut self) {
-        let new_col = self.col_pos.checked_sub(1);
+        let new_row = self.row_pos.checked_sub(1);
 
-        let (new_col, new_row) = match new_col {
-            Some(col) => (col, self.row_pos),
-            None => match self.row_pos.checked_sub(1) {
-                Some(row) => (self.get_cols().saturating_sub(1), row),
+        let (new_col, new_row) = match new_row {
+            Some(row) => (self.col_pos, row),
+            None => match self.col_pos.checked_sub(1) {
+                Some(col) => (col, self.get_rows().saturating_sub(1)),
                 None => (
-                    self.get_cols().saturating_sub(1),
+                    self.get_used_cols().saturating_sub(1),
                     self.get_rows().saturating_sub(1),
                 ),
             },
         };
 
-        let position = new_row * self.get_cols() + new_col;
-        if position >= self.get_values().len() as u16 {
-            self.col_pos = (self.get_values().len() as u16 % self.get_cols()).saturating_sub(1);
-            self.row_pos = self.get_rows().saturating_sub(1);
-        } else {
+        if self.valid_position(new_row, new_col) {
             self.col_pos = new_col;
             self.row_pos = new_row;
+        } else {
+            self.col_pos = self.get_used_cols().saturating_sub(1);
+            self.row_pos = (self.get_values().len() as u16 % self.get_rows()).saturating_sub(1);
         }
     }
 
@@ -183,55 +181,60 @@ impl ColumnarMenu {
             new_row
         } else {
             let new_row = self.get_rows().saturating_sub(1);
-            let index = new_row * self.get_cols() + self.col_pos;
-            if index >= self.values.len() as u16 {
-                new_row.saturating_sub(1)
-            } else {
+            if self.valid_position(new_row, self.col_pos) {
                 new_row
+            } else {
+                (self.get_values().len() as u16 % self.get_rows()).saturating_sub(1)
             }
         }
     }
 
-    /// Move menu cursor left
+    /// Move menu cursor down
     fn move_down(&mut self) {
         let new_row = self.row_pos + 1;
-        self.row_pos = if new_row >= self.get_rows() {
-            0
+        self.row_pos = if self.valid_position(new_row, self.col_pos) {
+            new_row
         } else {
-            let index = new_row * self.get_cols() + self.col_pos;
-            if index >= self.values.len() as u16 {
-                0
-            } else {
-                new_row
-            }
+            0
         }
     }
 
     /// Move menu cursor left
     fn move_left(&mut self) {
-        self.col_pos = if let Some(row) = self.col_pos.checked_sub(1) {
-            row
-        } else if self.index() + 1 == self.values.len() {
-            0
+        self.col_pos = if let Some(col) = self.col_pos.checked_sub(1) {
+            col
         } else {
-            self.get_cols().saturating_sub(1)
+            let cols_used = self.get_used_cols();
+            let new_col = cols_used.saturating_sub(1);
+            if self.valid_position(self.row_pos, new_col) {
+                new_col
+            } else {
+                cols_used.saturating_sub(2)
+            }
         }
     }
 
     /// Move menu cursor element
     fn move_right(&mut self) {
         let new_col = self.col_pos + 1;
-        self.col_pos = if new_col >= self.get_cols() || self.index() + 2 > self.values.len() {
-            0
-        } else {
+        self.col_pos = if self.valid_position(self.row_pos, new_col) {
             new_col
+        } else {
+            0
         }
     }
 
     /// Menu index based on column and row position
     fn index(&self) -> usize {
-        let index = self.row_pos * self.get_cols() + self.col_pos;
+        let index = self.col_pos * self.get_rows() + self.row_pos;
         index as usize
+    }
+
+    /// Checks if a given position is valid
+    fn valid_position(&self, row: u16, col: u16) -> bool {
+        row < self.get_rows()
+            && col < self.get_used_cols()
+            && ((col * self.get_rows() + row) as usize) < self.get_values().len()
     }
 
     /// Get selected value from the menu
@@ -239,7 +242,7 @@ impl ColumnarMenu {
         self.get_values().get(self.index()).cloned()
     }
 
-    /// Calculates how many rows the Menu will use
+    /// Calculates how many rows the menu will use
     fn get_rows(&self) -> u16 {
         let values = self.get_values().len() as u16;
 
@@ -253,6 +256,23 @@ impl ColumnarMenu {
             rows + 1
         } else {
             rows
+        }
+    }
+
+    /// Calculates how many columns the menu will use
+    fn get_used_cols(&self) -> u16 {
+        let values = self.get_values().len() as u16;
+
+        if values == 0 {
+            // When the values are empty the no_records_msg is shown, taking 1 column
+            return 1;
+        }
+
+        let cols = values / self.get_rows();
+        if values % self.get_rows() != 0 {
+            cols + 1
+        } else {
+            cols
         }
     }
 
@@ -286,21 +306,11 @@ impl ColumnarMenu {
         self.working_details.columns.max(1)
     }
 
-    /// End of line for menu
-    fn end_of_line(&self, column: u16) -> &str {
-        if column == self.get_cols().saturating_sub(1) {
-            "\r\n"
-        } else {
-            ""
-        }
-    }
-
     /// Creates default string that represents one suggestion from the menu
     fn create_string(
         &self,
         suggestion: &Suggestion,
         index: usize,
-        column: u16,
         empty_space: usize,
         use_ansi_coloring: bool,
     ) -> String {
@@ -351,7 +361,7 @@ impl ColumnarMenu {
             if index == self.index() {
                 if let Some(description) = &suggestion.description {
                     format!(
-                        "{}{}{}{}{}{}{}{}{}{:max_match$}{:max_remaining$}{}{}{}{}{}{}",
+                        "{}{}{}{}{}{}{}{}{}{:max_match$}{:max_remaining$}{}{}{}{}{}",
                         suggestion_style_prefix,
                         self.settings.color.selected_text_style.prefix(),
                         prefix,
@@ -372,11 +382,10 @@ impl ColumnarMenu {
                             .collect::<String>()
                             .replace('\n', " "),
                         RESET,
-                        self.end_of_line(column),
                     )
                 } else {
                     format!(
-                        "{}{}{}{}{}{}{}{}{}{}{}{}{:>empty$}{}",
+                        "{}{}{}{}{}{}{}{}{}{}{}{}{:>empty$}",
                         suggestion_style_prefix,
                         self.settings.color.selected_text_style.prefix(),
                         prefix,
@@ -390,13 +399,12 @@ impl ColumnarMenu {
                         remaining_str,
                         RESET,
                         "",
-                        self.end_of_line(column),
                         empty = empty_space,
                     )
                 }
             } else if let Some(description) = &suggestion.description {
                 format!(
-                    "{}{}{}{}{}{}{}{:max_match$}{:max_remaining$}{}{}{}{}{}",
+                    "{}{}{}{}{}{}{}{:max_match$}{:max_remaining$}{}{}{}{}",
                     suggestion_style_prefix,
                     prefix,
                     RESET,
@@ -414,11 +422,10 @@ impl ColumnarMenu {
                         .collect::<String>()
                         .replace('\n', " "),
                     RESET,
-                    self.end_of_line(column),
                 )
             } else {
                 format!(
-                    "{}{}{}{}{}{}{}{}{}{}{}{:>empty$}{}{}",
+                    "{}{}{}{}{}{}{}{}{}{}{}{:>empty$}{}",
                     suggestion_style_prefix,
                     prefix,
                     RESET,
@@ -432,7 +439,6 @@ impl ColumnarMenu {
                     self.settings.color.description_style.prefix(),
                     "",
                     RESET,
-                    self.end_of_line(column),
                     empty = empty_space,
                 )
             }
@@ -442,7 +448,7 @@ impl ColumnarMenu {
 
             let line = if let Some(description) = &suggestion.description {
                 format!(
-                    "{}{:max$}{}{}",
+                    "{}{:max$}{}",
                     marker,
                     &suggestion.value,
                     description
@@ -450,7 +456,6 @@ impl ColumnarMenu {
                         .take(empty_space)
                         .collect::<String>()
                         .replace('\n', " "),
-                    self.end_of_line(column),
                     max = self.longest_suggestion
                         + self
                             .default_details
@@ -459,11 +464,10 @@ impl ColumnarMenu {
                 )
             } else {
                 format!(
-                    "{}{}{:>empty$}{}",
+                    "{}{}{:>empty$}",
                     marker,
                     &suggestion.value,
                     "",
-                    self.end_of_line(column),
                     empty = empty_space.saturating_sub(marker.width()),
                 )
             };
@@ -665,17 +669,15 @@ impl Menu for ColumnarMenu {
                 available_lines = painter.remaining_lines().min(self.min_rows());
             }
 
-            let first_visible_row = self.skip_values / self.get_cols();
-
-            self.skip_values = if self.row_pos <= first_visible_row {
+            self.skip_rows = if self.row_pos < self.skip_rows {
                 // Selection is above the visible area, scroll up
-                self.row_pos * self.get_cols()
-            } else if self.row_pos >= first_visible_row + available_lines {
+                self.row_pos
+            } else if self.row_pos >= self.skip_rows + available_lines {
                 // Selection is below the visible area, scroll down
-                (self.row_pos.saturating_sub(available_lines) + 1) * self.get_cols()
+                self.row_pos.saturating_sub(available_lines) + 1
             } else {
                 // Selection is within the visible area
-                self.skip_values
+                self.skip_rows
             };
         }
     }
@@ -706,23 +708,29 @@ impl Menu for ColumnarMenu {
             // It seems that crossterm prefers to have a complete string ready to be printed
             // rather than looping through the values and printing multiple things
             // This reduces the flickering when printing the menu
-            let available_values = (available_lines * self.get_cols()) as usize;
-            let skip_values = self.skip_values as usize;
+            let num_rows: usize = self.get_rows().into();
+            let rows_to_draw = num_rows.min(available_lines.into());
 
-            self.get_values()
-                .iter()
-                .skip(skip_values)
-                .take(available_values)
-                .enumerate()
-                .map(|(index, suggestion)| {
-                    // Correcting the enumerate index based on the number of skipped values
-                    let index = index + skip_values;
-                    let column = index as u16 % self.get_cols();
-                    let empty_space = self.get_width().saturating_sub(suggestion.value.width());
+            let mut menu_string = String::new();
 
-                    self.create_string(suggestion, index, column, empty_space, use_ansi_coloring)
-                })
-                .collect()
+            for line in 0..rows_to_draw {
+                let skip_value = self.skip_rows as usize + line;
+                let row_string: String = self
+                    .get_values()
+                    .iter()
+                    .enumerate()
+                    .skip(skip_value)
+                    .step_by(num_rows)
+                    .take(self.get_cols().into())
+                    .map(|(index, suggestion)| {
+                        let empty_space = self.get_width().saturating_sub(suggestion.value.width());
+                        self.create_string(suggestion, index, empty_space, use_ansi_coloring)
+                    })
+                    .collect();
+                menu_string.push_str(&row_string);
+                menu_string.push_str("\r\n");
+            }
+            menu_string
         }
     }
 }
