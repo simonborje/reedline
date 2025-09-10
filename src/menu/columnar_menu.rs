@@ -214,7 +214,7 @@ impl ColumnarMenu {
         }
     }
 
-    /// Move menu cursor element
+    /// Move menu cursor right
     fn move_right(&mut self) {
         let new_col = self.col_pos + 1;
         self.col_pos = if self.valid_position(self.row_pos, new_col) {
